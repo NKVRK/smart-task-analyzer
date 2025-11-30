@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Smart Task Analyzer</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Smart Task Analyzer</h1>
+      <p class="subtitle">Intelligent task prioritization with configurable scoring strategies</p>
+    </header>
+
+    <div class="layout">
+      <!-- Input Section -->
+      <div class="section">
+        <h2>Input Tasks</h2>
+        <p class="section-desc">Add tasks individually or paste JSON for bulk input</p>
+
+        <div class="form-group">
+          <label for="jsonInput">Bulk JSON Input</label>
+          <textarea id="jsonInput" placeholder='[{"id":"t1","title":"Fix bug","due_date":"2025-12-01","importance":8,"estimated_hours":3,"dependencies":[]}]'></textarea>
+          <div class="hint">Format: JSON array with id, title, due_date, importance (1-10), estimated_hours, dependencies</div>
+          <div id="jsonError" class="error-msg"></div>
+        </div>
+
+        <div class="form-group">
+          <label>Single Task Entry</label>
+          <div class="form-row">
+            <div>
+              <input type="text" id="taskTitle" placeholder="Task title" autocomplete="off">
+              <div id="titleError" class="error-msg"></div>
+            </div>
+            <div>
+              <input type="date" id="taskDate">
+              <div id="dateError" class="error-msg"></div>
+            </div>
+          </div>
+          <div class="form-row">
+            <div>
+              <input type="number" id="taskImportance" min="1" max="10" placeholder="Importance (1-10)">
+              <div id="importanceError" class="error-msg"></div>
+            </div>
+            <div>
+              <input type="number" id="taskHours" min="0" step="0.5" placeholder="Estimated hours">
+              <div id="hoursError" class="error-msg"></div>
+            </div>
+          </div>
+          <div>
+            <input type="text" id="taskDeps" placeholder='Dependencies (e.g., "t1,t2")'>
+            <div id="depsError" class="error-msg"></div>
+          </div>
+        </div>
+
+        <div class="btn-group">
+          <span class="strategy-label">Strategy:</span>
+          <select id="strategy">
+            <option value="smart_balance">Smart Balance</option>
+            <option value="deadline_driven">Deadline Driven</option>
+            <option value="high_impact">High Impact</option>
+            <option value="fastest_wins">Fastest Wins</option>
+          </select>
+        </div>
+
+        <div class="btn-group">
+          <button id="addTaskBtn">Add to JSON</button>
+          <button id="analyzeBtn" class="btn-primary">Analyze Tasks</button>
+          <button id="suggestBtn" class="btn-primary">Get Top 3 Suggestions</button>
+        </div>
+      </div>
+
+      <!-- Results Section -->
+      <div class="section">
+        <h2>Results</h2>
+        <p class="section-desc">Prioritized tasks with scores and explanations</p>
+
+        <div id="suggestionsArea"></div>
+        <div id="resultsArea">
+          <div class="empty-state">No results yet. Add tasks and click Analyze or Get Top 3 Suggestions.</div>
+        </div>
+
+        <div id="metaArea" class="meta-box" style="display:none;">
+          <div class="meta-title">Meta & warnings</div>
+          <pre id="metaContent"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="notification" class="notification"></div>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>
