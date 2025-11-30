@@ -9,7 +9,6 @@ class ScoringTests(TestCase):
             {"id":"b","title":"future","due_date":"2099-01-01","importance":10,"estimated_hours":1,"dependencies":[]}
         ]
         res = calculate_scores(tasks)
-        # task a should have high urgency part due to being past due
         scores = {t['id']: t['score'] for t in res['analyzed_tasks']}
         self.assertIn('a', scores)
         self.assertIn('b', scores)

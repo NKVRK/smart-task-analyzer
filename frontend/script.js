@@ -1,5 +1,3 @@
-/* script.js - Clean frontend logic */
-
 const state = {
   lastResult: null
 };
@@ -53,7 +51,6 @@ function disableButtons(disabled) {
   });
 }
 
-/* NEW: update meta area */
 function updateMeta(meta) {
   const box = document.getElementById('metaArea');
   const pre = document.getElementById('metaContent');

@@ -3,7 +3,6 @@ from django.http import JsonResponse, HttpResponseBadRequest
 from django.views.decorators.csrf import csrf_exempt
 from .scoring import calculate_scores
 
-# simple in-memory store for last analyzed tasks (keeps server stateless across runs)
 LAST_ANALYSIS = {
     "result": None
 }
@@ -31,7 +30,6 @@ def analyze_tasks(request):
     weights = payload.get("weights")
 
     result = calculate_scores(tasks, strategy=strategy, custom_weights=weights)
-    # store last analysis for GET /suggest/
     LAST_ANALYSIS["result"] = result
     return JsonResponse(result, safe=False)
 
@@ -47,7 +45,6 @@ def suggest_tasks(request):
     result = LAST_ANALYSIS.get("result")
     if not result:
         return JsonResponse({"error": "No analyzed tasks found. POST to /api/tasks/analyze/ first."}, status=400)
-
-    # ability to adjust strategy is limited if we don't have original input weights. For now return top 3 as-is.
+    
     top3 = result.get("analyzed_tasks", [])[:3]
     return JsonResponse({"suggested_tasks": top3, "meta": result.get("meta")})
