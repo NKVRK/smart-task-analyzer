@@ -12,6 +12,7 @@ STRATEGY_PRESETS = {
 
 MAX_PAST_DUE_DAYS_FOR_BOOST = 30  # cap the boost for very old tasks
 
+
 def _parse_date(value):
     if value is None:
         return None
@@ -25,6 +26,7 @@ def _parse_date(value):
             return datetime.strptime(value, "%Y-%m-%d").date()
         except Exception:
             return None
+
 
 def detect_cycles(tasks):
     """
@@ -79,6 +81,7 @@ def detect_cycles(tasks):
             unique.append(list(dict.fromkeys(c)))  # remove duplicates, preserve order
             seen.add(key)
     return unique
+
 
 def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
     """
@@ -142,11 +145,14 @@ def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
             days = (dd - today).days
             if days < 0:
                 # past due: boost but cap
-                urgency_scores[tid] = min(1.0, 1.0 + min(-days, MAX_PAST_DUE_DAYS_FOR_BOOST) / MAX_PAST_DUE_DAYS_FOR_BOOST)
+                urgency_scores[tid] = min(
+                    1.0,
+                    1.0 + min(-days, MAX_PAST_DUE_DAYS_FOR_BOOST) / MAX_PAST_DUE_DAYS_FOR_BOOST,
+                )
             else:
                 # map 0..max_horizon to 1..0 using a smooth decay (max horizon default 60 days)
                 max_horizon = 60.0
-                urgency_scores[tid] = max(0.0, 1.0 - (days/ max_horizon))
+                urgency_scores[tid] = max(0.0, 1.0 - (days / max_horizon))
                 urgency_scores[tid] = min(1.0, urgency_scores[tid])
 
         # effort raw
@@ -169,7 +175,8 @@ def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
         min_d = min(dependencies_outdegree.values()) if dependencies_outdegree else 0
         max_d = max(dependencies_outdegree.values()) if dependencies_outdegree else 1
     else:
-        min_d = 0; max_d = 1
+        min_d = 0
+        max_d = 1
     dependencies_scores = {}
     for t in normalized:
         v = dependencies_outdegree.get(t["id"], 0)
@@ -183,10 +190,31 @@ def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
     # ensure weights sum to 1
     wsum = sum(weights.values())
     if abs(wsum - 1.0) > 1e-6:
-        weights = {k: v / wsum for k,v in weights.items()}
+        weights = {k: v / wsum for k, v in weights.items()}
 
     # detect cycles
     cycles = detect_cycles(normalized)
+
+    # build cycle metadata + per-task membership
+    cycle_memberships = defaultdict(list)
+    cycle_list = []
+    if cycles:
+        for idx, c in enumerate(cycles, start=1):
+            cycle_list.append(
+                {
+                    "cycle_id": idx,
+                    "tasks": c,
+                    "message": "circular dependency detected",
+                }
+            )
+            # mark each unique task in this cycle
+            for tid in set(c):
+                cycle_memberships[tid].append(idx)
+
+    if cycle_list:
+        meta = {"cycles": cycle_list, "strategy_used": strategy}
+    else:
+        meta = {"cycles": [], "strategy_used": strategy}
 
     # assemble final scores and explanations
     out = []
@@ -197,10 +225,12 @@ def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
         s_eff = effort_scores[tid]
         s_dep = dependencies_scores[tid]
 
-        score = (weights.get("urgency",0)*s_urg +
-                 weights.get("importance",0)*s_imp +
-                 weights.get("dependencies",0)*s_dep +
-                 weights.get("effort",0)*s_eff)
+        score = (
+            weights.get("urgency", 0) * s_urg
+            + weights.get("importance", 0) * s_imp
+            + weights.get("dependencies", 0) * s_dep
+            + weights.get("effort", 0) * s_eff
+        )
 
         # tiering
         tier = "Low"
@@ -223,7 +253,7 @@ def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
             reasons.append("No due date")
 
         if t["dependencies"]:
-            reasons.append(f"Blocks {dependencies_outdegree.get(tid,0)} task(s)")
+            reasons.append(f"Blocks {dependencies_outdegree.get(tid, 0)} task(s)")
         if t["estimated_hours"] <= 2:
             reasons.append("Quick win (low estimated hours)")
         if t["importance"] >= 8:
@@ -231,35 +261,44 @@ def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
 
         explanation = "; ".join(reasons)
 
-        out.append({
-            "id": tid,
-            "title": t.get("title"),
-            "due_date": t.get("due_date"),
-            "estimated_hours": t.get("estimated_hours"),
-            "importance": t.get("importance"),
-            "dependencies": t.get("dependencies"),
-            "score": round(score, 4),
-            "tier": tier,
-            "score_breakdown": {
-                "urgency": round(s_urg, 4),
-                "importance": round(s_imp, 4),
-                "effort": round(s_eff, 4),
-                "dependencies": round(s_dep, 4),
-                "weights": {k: round(v, 4) for k,v in weights.items()}
-            },
-            "explanation": explanation,
-            "warnings": []
-        })
+        # warnings (currently: cycles)
+        warnings = []
+        if tid in cycle_memberships:
+            cycle_ids = cycle_memberships[tid]
+            if len(cycle_ids) == 1:
+                warnings.append(
+                    f"Task is part of a circular dependency (cycle #{cycle_ids[0]})."
+                )
+            else:
+                warnings.append(
+                    f"Task is part of multiple circular dependencies (cycles {', '.join(map(str, cycle_ids))})."
+                )
 
-    # attach cycle warnings
-    if cycles:
-        cycle_list = []
-        for idx, c in enumerate(cycles, start=1):
-            cycle_list.append({"cycle_id": idx, "tasks": c, "message": "circular dependency detected"})
-        meta = {"cycles": cycle_list, "strategy_used": strategy}
-    else:
-        meta = {"cycles": [], "strategy_used": strategy}
+        out.append(
+            {
+                "id": tid,
+                "title": t.get("title"),
+                "due_date": t.get("due_date"),
+                "estimated_hours": t.get("estimated_hours"),
+                "importance": t.get("importance"),
+                "dependencies": t.get("dependencies"),
+                "score": round(score, 4),
+                "tier": tier,
+                "score_breakdown": {
+                    "urgency": round(s_urg, 4),
+                    "importance": round(s_imp, 4),
+                    "effort": round(s_eff, 4),
+                    "dependencies": round(s_dep, 4),
+                    "weights": {k: round(v, 4) for k, v in weights.items()},
+                },
+                "explanation": explanation,
+                "warnings": warnings,
+            }
+        )
 
     # sort by score desc then importance then estimated_hours asc
-    out_sorted = sorted(out, key=lambda x: (-x["score"], -x["importance"], x["estimated_hours"]))
+    out_sorted = sorted(
+        out,
+        key=lambda x: (-x["score"], -x["importance"], x["estimated_hours"]),
+    )
     return {"analyzed_tasks": out_sorted, "meta": meta}

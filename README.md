@@ -1,35 +1,22 @@
 # Smart Task Analyzer
 
-A full-stack Django + Vanilla JS application for **explainable task prioritization**. 
+A full‑stack Django + Vanilla JavaScript application for **intelligent, explainable task prioritization**.  
+The system evaluates tasks based on urgency, importance, effort, and dependencies, producing a clear, ranked list of what the user should work on first.
+
 ---
 
 ## ⭐ Overview
 
-Smart Task Analyzer evaluates tasks using weighted scoring models that consider:
+The Smart Task Analyzer combines a configurable scoring algorithm with a clean and responsive frontend interface.  
+It gives users:
 
-- **Importance**
-- **Urgency**
-- **Effort**
-- **Dependencies**
-- **Strategy-based weight adjustments**
+- A fully explainable priority score  
+- Strategy‑based prioritization  
+- Cycle detection for dependencies  
+- Clear reasoning for each score  
+- A clean UI with JSON input, single‑task form, and result panels  
 
-It produces:
-
-- A **ranked list of tasks**
-- **Explanations** for each task
-- **Score breakdown**
-- **Warnings & cycles detection**
-- **Meta information**
-- **Top 3 suggestions** (for today)
-
-Frontend provides a clean, accessible UI with:
-
-- Single-task form  
-- JSON bulk input  
-- Strategy selector  
-- Result cards with explanations, warnings, and breakdown  
-- Meta panel  
-- Keyboard shortcut (**Ctrl+Enter** → Analyze)
+The backend exposes two API endpoints, and the frontend consumes them through a simple and intuitive interface.
 
 ---
 
@@ -60,7 +47,7 @@ task-analyzer/
 
 ## ⚙️ Setup Instructions
 
-### 1. Create a virtual environment
+### 1. Create and activate a virtual environment
 
 ```bash
 python3 -m venv venv
@@ -73,121 +60,127 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Apply migrations
+### 3. Apply database migrations
 
 ```bash
 python manage.py migrate
 ```
 
-### 4. Run the application
+### 4. Run the development server
 
 ```bash
 python manage.py runserver
 ```
 
-Open in browser:
+Open the application at:
 
 **http://127.0.0.1:8000/**
 
 ---
 
-## 🧠 Algorithm Explanation
+## 🧠 Algorithm Explanation (Human‑Readable)
 
-The Smart Task Analyzer uses a transparent and interpretable scoring approach that assigns each task a numeric score from 0–100. The score is based on four components: **importance**, **urgency**, **effort**, and **dependencies**. Strategy presets modify the weights to emphasize different priorities, such as deadlines, high impact, or quick wins.
+The Smart Task Analyzer assigns each task a numerical score based on four key components:
 
-### 1. Importance
-Importance is a user-defined value between 1 and 10. It is normalized to 0–1 using:
+### **1. Importance**
+A value from 1 to 10.  
+It is normalized into a 0–1 scale:
 
 ```
 importance_score = importance / 10
 ```
 
-Higher importance directly increases the final score. Strategies like `high_impact` place higher weight on this component.
+### **2. Urgency**
+Based on the due date:
+
+- Tasks due soon receive higher urgency.
+- Tasks past due receive a strong boost, capped to avoid extreme scores.
+- Tasks with no due date get urgency = 0.
+
+```
+If overdue:
+    urgency = 1.0 (with capped boost)
+Else:
+    urgency = 1 - (days_left / 60)
+```
+
+The urgency scale smoothly decreases for tasks further into the future, using a 60‑day horizon.
+
+### **3. Effort**
+Lower-effort tasks are considered “quick wins.”  
+Raw effort is converted into a decreasing function:
+
+```
+effort_raw = 1 / (1 + estimated_hours)
+```
+
+Then normalized across all tasks so scores remain consistent regardless of range.
+
+### **4. Dependencies (Out‑degree weight)**
+A task that other tasks depend on becomes more valuable to complete early.  
+The analyzer counts how many tasks depend on each task:
+
+```
+dependencies_outdegree[task_id] = number of tasks that list it as a dependency
+```
+
+This value is normalized so that heavily blocking tasks rank higher.
 
 ---
 
-### 2. Urgency
-Urgency is derived from the number of days remaining until the due date. Tasks past their due date receive maximum urgency.
+## 🎯 Strategy-Based Weighting
+
+The system supports multiple scoring strategies.  
+Each strategy adjusts the relative importance of urgency, importance, effort, and dependencies.
+
+| Strategy         | Urgency | Importance | Dependencies | Effort |
+|------------------|---------|------------|--------------|--------|
+| smart_balance    | 0.35    | 0.30       | 0.20         | 0.15   |
+| deadline_driven  | 0.60    | 0.20       | 0.10         | 0.10   |
+| high_impact      | 0.20    | 0.60       | 0.15         | 0.05   |
+| fastest_wins     | 0.15    | 0.15       | 0.10         | 0.60   |
+
+The final score is:
 
 ```
-if no due date → urgency = 0.2
-if overdue → urgency = 1.0
-else urgency = 1 - (days_left / 30), clipped to 0..1
+score = urgency*w1 + importance*w2 + dependencies*w3 + effort*w4
 ```
 
-Strategies such as `deadline_driven` heavily weight this factor.
+Then tasks are sorted by:
+
+1. Highest score  
+2. Highest importance  
+3. Lowest effort  
+
+This ensures meaningful and stable ordering even when scores are close.
 
 ---
 
-### 3. Effort
-Effort reduces the score for tasks requiring more time. Lower effort means easier wins:
+## 🔍 Circular Dependency Detection
 
-```
-effort_score = 1 / (1 + estimated_hours)
-```
+The analyzer performs graph‑based cycle detection using depth‑first search.  
+If cycles are found, they are included in the `meta` section of the API response.
 
-`fastest_wins` strategy increases this weight, surfacing tasks that can be completed quickly.
+Example:
 
----
-
-### 4. Dependencies
-Dependencies penalize tasks that rely on other tasks. Each dependency adds a small penalty to the final score.
-
-```
-dependency_penalty = 0.1 × number_of_dependencies
+```json
+{
+  "cycle_id": 1,
+  "tasks": ["t1", "t2", "t1"],
+  "message": "circular dependency detected"
+}
 ```
 
-The system detects cycles using a DFS graph traversal. Detected cycles are reported in `meta.cycles`, and related tasks get warnings.
-
----
-
-### 5. Weighted Score
-
-Weights vary per strategy:
-
-| Component   | smart_balance | deadline_driven | high_impact | fastest_wins |
-|-------------|---------------|-----------------|-------------|--------------|
-| Importance  | 0.35          | 0.25            | 0.60        | 0.20         |
-| Urgency     | 0.35          | 0.60            | 0.20        | 0.20         |
-| Effort      | 0.20          | 0.10            | 0.10        | 0.50         |
-| Dependencies| 0.10          | 0.05            | 0.10        | 0.10         |
-
-Final score:
-
-```
-score = 100 * (importance * w1 + urgency * w2 + effort * w3 - dep_penalty * w4)
-```
-
----
-
-### 6. Tier Classification
-
-- **High Priority** — score ≥ 70  
-- **Medium Priority** — 40–69  
-- **Low Priority** — < 40  
-
----
-
-### 7. Explainability
-
-Each analyzed task returns:
-
-- A human-readable explanation  
-- A full `score_breakdown`  
-- Any warnings  
-- All cycles in `meta`  
-
-This ensures the system is never a “black box.”
+This helps users understand why certain tasks cannot be completed in a valid order.
 
 ---
 
 ## 🔗 API Endpoints
 
-### **POST /api/tasks/analyze/**
+### **POST /api/tasks/analyze/**  
+Analyzes and returns all tasks sorted by priority.
 
-Analyzes and ranks tasks.
-
-**Request:**
+**Request Example:**
 
 ```json
 {
@@ -205,40 +198,89 @@ Analyzes and ranks tasks.
 }
 ```
 
-### **GET /api/tasks/suggest/?strategy=smart_balance**
-
-Returns top 3 tasks for today.
+### **GET /api/tasks/suggest/?strategy=smart_balance**  
+Returns the top 3 tasks from the most recent analysis.
 
 ---
 
 ## 🧪 Running Tests
 
+The project includes unit tests for:
+
+- Past‑due urgency handling  
+- Cycle detection  
+- Defaulting of missing fields  
+
+Run tests with:
+
 ```bash
 python manage.py test
 ```
 
-Covers:
-- Urgency logic  
-- Overdue tasks  
-- Dependency penalties  
-- Cycle detection  
-- Strategy impact  
+---
+
+## 🎨 Frontend Usage Guide
+
+- Add tasks using the single‑task form or paste JSON directly.  
+- Choose a strategy from the dropdown.  
+- Click **Analyze Tasks** or **Get Top 3 Suggestions**.  
+- View:
+  - Priority tier  
+  - Score breakdown  
+  - Explanations  
+  - Dependency warnings  
+  - Meta section with cycles  
+
+Keyboard shortcut:
+
+**Ctrl + Enter → Analyze Tasks**
+
+The interface is responsive and works across screen sizes.
 
 ---
 
-## 🎨 Frontend Usage
+## 🧩 Design Decisions
 
-- Use **Single Task Form** OR **Bulk JSON Input**
-- Select a strategy
-- Click **Analyze**
-- Click **Get Top 3 Suggestions**
-- Expand **Score Breakdown**
-- Meta panel shows:
-  - cycles  
-  - strategy used  
-  - warnings  
-
-Keyboard Shortcuts:
-- **Ctrl + Enter** → Analyze
+- **Normalization:** Effort and dependency values are normalized to keep scoring consistent regardless of dataset size.
+- **60‑day urgency horizon:** Provides a smooth decay curve and avoids punishing tasks with distant deadlines too harshly.
+- **Separate strategy presets:** Keeps the algorithm clean and allows users to shift priorities instantly.
+- **Cycle detection included in meta:** Avoids mixing warnings with the core score but still surfaces important structural issues.
+- **Lightweight frontend:** Pure JavaScript without any framework to keep the solution simple and fast.
 
 ---
+
+## ⏱️ Time Breakdown
+
+Approximate time spent:
+
+- Backend algorithm design: **1 hr 30 min**
+- Backend API implementation: **25 min**
+- Frontend UI + JS logic: **1 hr**
+- Testing + cycle detection: **20 min**
+- README documentation: **10 min**
+
+---
+
+## 🚀 Future Improvements
+
+- Add visual dependency graph
+- Add weekend/holiday‑aware urgency adjustment
+- Add Eisenhower Matrix visualization
+- Save tasks to database for persistence
+- Improve suggestion logic to consider “today’s workload”
+- Provide per‑task warnings for cycles directly inside task cards
+
+---
+
+## ✔ Submission Includes
+
+- Django backend
+- Frontend HTML/CSS/JS
+- Scoring engine with strategies
+- API endpoints
+- Unit tests
+- README with design explanation
+
+---
+
+This completes the Smart Task Analyzer documentation.
