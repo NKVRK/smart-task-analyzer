@@ -83,48 +83,111 @@ def detect_cycles(tasks):
     return unique
 
 
+# Overwrite the existing calculate_scores function with this version
 def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
     """
     Input: tasks: list of dicts. Each task should include:
       id, title, due_date (YYYY-MM-DD or None), importance (1-10), estimated_hours (float/int), dependencies (list)
-    Returns: list of task dicts with calculated 'score', 'tier', 'score_breakdown', 'explanation', and meta
+    Returns: dict with 'analyzed_tasks' and 'meta'
     """
     today = date.today()
+    # container for validation/warnings
+    warnings_map = defaultdict(list)
+
     # validate and normalize tasks
     normalized = []
     for i, t in enumerate(tasks):
         nt = dict(t)  # shallow copy
         nt.setdefault("id", f"t{ i+1 }")
         nt.setdefault("title", nt["id"])
+
+        # importance normalization with warning if corrected
+        orig_imp = nt.get("importance", None)
         nt.setdefault("importance", 5)
         try:
             nt["importance"] = max(1, min(10, int(nt.get("importance", 5))))
+            if orig_imp is not None:
+                try:
+                    # if original wasn't an integer or out of range, record
+                    if int(orig_imp) != nt["importance"]:
+                        warnings_map[nt["id"]].append(
+                            f"importance value '{orig_imp}' normalized to {nt['importance']}"
+                        )
+                except Exception:
+                    # orig_imp wasn't int-convertible
+                    warnings_map[nt["id"]].append(
+                        f"importance value '{orig_imp}' is invalid and defaulted to {nt['importance']}"
+                    )
         except Exception:
             nt["importance"] = 5
+            warnings_map[nt["id"]].append(
+                f"importance value '{orig_imp}' is invalid and defaulted to 5"
+            )
+
+        # estimated_hours normalization with warning if corrected
+        orig_hours = nt.get("estimated_hours", None)
         try:
             nt["estimated_hours"] = float(nt.get("estimated_hours", 2.0))
             if nt["estimated_hours"] < 0:
                 nt["estimated_hours"] = 2.0
+                warnings_map[nt["id"]].append(
+                    f"estimated_hours '{orig_hours}' was negative and set to 2.0"
+                )
+            else:
+                # if provided but had weird type (e.g. string "3h"), conversion may have thrown above
+                if orig_hours is not None and float(orig_hours) != nt["estimated_hours"]:
+                    # only warn if original differs after conversion (non-critical)
+                    # (but avoid spamming when orig_hours is numeric matching)
+                    pass
         except Exception:
             nt["estimated_hours"] = 2.0
+            warnings_map[nt["id"]].append(
+                f"estimated_hours value '{orig_hours}' is invalid and defaulted to 2.0"
+            )
+
         # parse dates
         nt["due_date_parsed"] = _parse_date(nt.get("due_date"))
+
+        # dependencies: coerce to list and warn if not list
         deps = nt.get("dependencies") or []
         if not isinstance(deps, list):
-            deps = list(deps) if deps else []
+            # coerce strings like "t1,t2" -> list
+            try:
+                # if it's a comma-separated string
+                if isinstance(deps, str):
+                    deps = [s.strip() for s in deps.split(",") if s.strip()]
+                    warnings_map[nt["id"]].append(
+                        f"dependencies value was a string and coerced to list: {deps}"
+                    )
+                else:
+                    deps = list(deps)
+                    warnings_map[nt["id"]].append(
+                        "dependencies value coerced to list"
+                    )
+            except Exception:
+                deps = []
+                warnings_map[nt["id"]].append(
+                    "dependencies value invalid; treated as empty list"
+                )
         nt["dependencies"] = deps
+
         normalized.append(nt)
 
+    # build id set (for unknown dependency detection)
+    id_set = {t["id"] for t in normalized}
+
+    # now detect unknown dependency references and add warnings
+    for t in normalized:
+        for d in t.get("dependencies", []):
+            if d not in id_set:
+                warnings_map[t["id"]].append(f"dependency '{d}' not found in provided tasks")
+
+    # ... the rest of your original scoring logic follows unchanged ...
     # compute raw sub-scores
-    # importance_score: importance/10
-    # urgency_score: 0..1 where past-due -> 1.0, far future -> 0.0
-    # effort_score: quick wins higher -> 1/(1+hours) normalized afterwards
-    # dependencies_score: tasks that block many others -> higher
     importance_scores = {}
     urgency_scores = {}
     effort_raw = {}
     dependencies_outdegree = defaultdict(int)
-    id_set = {t["id"] for t in normalized}
 
     # compute dependencies out-degree (how many depend on this task)
     for t in normalized:
@@ -144,13 +207,11 @@ def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
         else:
             days = (dd - today).days
             if days < 0:
-                # past due: boost but cap
                 urgency_scores[tid] = min(
                     1.0,
                     1.0 + min(-days, MAX_PAST_DUE_DAYS_FOR_BOOST) / MAX_PAST_DUE_DAYS_FOR_BOOST,
                 )
             else:
-                # map 0..max_horizon to 1..0 using a smooth decay (max horizon default 60 days)
                 max_horizon = 60.0
                 urgency_scores[tid] = max(0.0, 1.0 - (days / max_horizon))
                 urgency_scores[tid] = min(1.0, urgency_scores[tid])
@@ -159,7 +220,6 @@ def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
         effort_raw[tid] = 1.0 / (1.0 + t["estimated_hours"])
 
     # normalize effort and dependencies to 0..1
-    # effort normalization
     min_e = min(effort_raw.values()) if effort_raw else 0.0
     max_e = max(effort_raw.values()) if effort_raw else 1.0
     effort_scores = {}
@@ -170,7 +230,6 @@ def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
         for k, v in effort_raw.items():
             effort_scores[k] = (v - min_e) / (max_e - min_e)
 
-    # dependencies normalization (outdegree)
     if dependencies_outdegree:
         min_d = min(dependencies_outdegree.values()) if dependencies_outdegree else 0
         max_d = max(dependencies_outdegree.values()) if dependencies_outdegree else 1
@@ -187,12 +246,11 @@ def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
 
     # pick weights
     weights = custom_weights or STRATEGY_PRESETS.get(strategy, STRATEGY_PRESETS["smart_balance"])
-    # ensure weights sum to 1
     wsum = sum(weights.values())
     if abs(wsum - 1.0) > 1e-6:
         weights = {k: v / wsum for k, v in weights.items()}
 
-    # detect cycles
+    # detect cycles (existing code)
     cycles = detect_cycles(normalized)
 
     # build cycle metadata + per-task membership
@@ -207,7 +265,6 @@ def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
                     "message": "circular dependency detected",
                 }
             )
-            # mark each unique task in this cycle
             for tid in set(c):
                 cycle_memberships[tid].append(idx)
 
@@ -216,7 +273,15 @@ def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
     else:
         meta = {"cycles": [], "strategy_used": strategy}
 
-    # assemble final scores and explanations
+    # also include warnings summary in meta
+    flat_warnings = []
+    for tid, msgs in warnings_map.items():
+        if msgs:
+            flat_warnings.append({"task_id": tid, "warnings": msgs})
+    if flat_warnings:
+        meta["warnings_summary"] = flat_warnings
+
+    # assemble final output (preserve existing output shape)
     out = []
     for t in normalized:
         tid = t["id"]
@@ -239,7 +304,7 @@ def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
         elif score >= 0.45:
             tier = "Medium"
 
-        # human readable explanation
+        # human readable explanation (same as before)
         reasons = []
         if t["due_date_parsed"]:
             days = (t["due_date_parsed"] - today).days
@@ -261,7 +326,7 @@ def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
 
         explanation = "; ".join(reasons)
 
-        # warnings (currently: cycles)
+        # collect warnings: cycles + normalized-input warnings
         warnings = []
         if tid in cycle_memberships:
             cycle_ids = cycle_memberships[tid]
@@ -273,6 +338,8 @@ def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
                 warnings.append(
                     f"Task is part of multiple circular dependencies (cycles {', '.join(map(str, cycle_ids))})."
                 )
+        # append other warnings from normalization
+        warnings.extend(warnings_map.get(tid, []))
 
         out.append(
             {
@@ -296,7 +363,6 @@ def calculate_scores(tasks, strategy="smart_balance", custom_weights=None):
             }
         )
 
-    # sort by score desc then importance then estimated_hours asc
     out_sorted = sorted(
         out,
         key=lambda x: (-x["score"], -x["importance"], x["estimated_hours"]),
